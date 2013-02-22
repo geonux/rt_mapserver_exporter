@@ -191,7 +191,7 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
 
         # create a new ms_map
         ms_map = mapscript.mapObj()
-        ms_map.name = _toUtf8( self.txtMapName.text() )
+        ms_map.name = _toUtf8( self.txtMapName.text().replace(" ", "") )
 
         # map size
         (width, widthOk), (height, heightOk) = self.txtMapWidth.text().toInt(), self.txtMapHeight.text().toInt()
@@ -206,7 +206,7 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
                 ms_map.units = units
 
         # config options
-        ms_map.setConfigOption("MS_ERRORFILE", "/tmp/ms_"+ _toUtf8( self.txtMapName.text() ) +".log")
+        ms_map.setConfigOption("MS_ERRORFILE", "/tmp/ms_"+ ms_map.name +".log")
 
         # map extent
         extent = self.canvas.fullExtent()
@@ -228,6 +228,7 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
         ms_map.setImageType( _toUtf8( self.cmbMapImageType.currentText() ) )
         ms_outformat = ms_map.getOutputFormatByName( ms_map.imagetype )
         ms_outformat.transparent = self.onOffMap[ True ]
+        ms_map.transparent = mapscript.MS_TRUE
 
         # legend section
         #r,g,b,a = self.canvas.canvasColor().getRgb()
@@ -253,7 +254,18 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
         ms_map.web.footer = _toUtf8( self.getTemplateFooterPath() )
 
         # map metadata
-        ms_map.setMetaData( "ows_title", ms_map.name )
+        if (QgsProject.instance().readBoolEntry( "WMSServiceCapabilities", "/", False )):
+            ms_map.setMetaData( "ows_title", _toUtf8( QgsProject.instance().readEntry("WMSServiceTitle", "/", "")[0] ) )
+            ms_map.setMetaData( "ows_abstract", _toUtf8( QgsProject.instance().readEntry("WMSServiceAbstract", "/", "")[0] ) )
+            ms_map.setMetaData( "ows_contactorganization", _toUtf8( QgsProject.instance().readEntry("WMSContactOrganization", "/", "")[0] ) )
+            ms_map.setMetaData( "ows_contactperson", _toUtf8( QgsProject.instance().readEntry("WMSContactPerson", "/", "")[0] ) )
+            ms_map.setMetaData( "ows_contactelectronicmailaddress", _toUtf8( QgsProject.instance().readEntry("WMSContactMail", "/", "")[0] ) )
+            ms_map.setMetaData( "ows_contactvoicetelephone", _toUtf8( QgsProject.instance().readEntry("WMSContactPhone", "/", "")[0] ) )
+            ms_map.setMetaData( "ows_keywordlist", _toUtf8( QgsProject.instance().readListEntry("WMSKeywordList", "/") [0].join(",") ) )
+            ms_map.setMetaData( "ows_accessconstraints", _toUtf8( QgsProject.instance().readEntry("WMSAccessConstraints", "/", "")[0] ) )
+        else:
+            ms_map.setMetaData( "ows_title", _toUtf8( self.txtMapName.text() ) )
+        
         ms_map.setMetaData( "ows_onlineresource", _toUtf8( u"%s?map=%s" % (self.txtMapServerUrl.text(), self.txtMapFilePath.text()) ) )
         srsList = ["EPSG:4326"]
         srsList.append( _toUtf8( self.canvas.mapRenderer().destinationCrs().authid() ) )
@@ -303,9 +315,10 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
                 uri = QgsDataSourceURI( layer.source() )
                 ms_layer.connection = _toUtf8( uri.connectionInfo() )
                 data = u"%s FROM %s" % ( uri.geometryColumn(), uri.quotedTablename() )
+                #The keyColumn name is invalid with QGis 1.9dev
                 if uri.keyColumn() != "":
                     data += u" USING UNIQUE %s" % uri.keyColumn()
-                data += u" USING UNIQUE %s" % layer.crs().postgisSrid()
+                data += u" USING srid=%s" % uri.srid()
                 if uri.sql() != "":
                   data += " FILTER (%s)" % uri.sql()
                 ms_layer.data = _toUtf8( data )
@@ -332,8 +345,6 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
                 ms_layer.setMetaData( "ows_name", ','.join(wmsNames) )
                 ms_layer.setMetaData( "wms_server_version", "1.1.1" )
                 ms_layer.setMetaData( "ows_srs", ' '.join(srsList) )
-                #ms_layer.setMetaData( "wms_format", layer.format() )
-                #ms_layer.setMetaData( "wms_format", ','.join(wmsStyles) )
                 ms_layer.setMetaData( "wms_format", q["format"][0] )
 
             elif layer.providerType() == 'wfs':
