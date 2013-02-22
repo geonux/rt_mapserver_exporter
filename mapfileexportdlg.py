@@ -29,7 +29,11 @@ from qgis.gui import *
 from .ui.mapfileexportdlg_ui import Ui_MapfileExportDlg
 import mapscript
 
+from urlparse import parse_qs
+
 _toUtf8 = lambda s: unicode(s).encode('utf8')
+
+mmToPixelFactor = 3.77952755905 # pour 96 dpi = 38 dot/cm = 3.8 dot/mm
 
 
 class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
@@ -183,13 +187,19 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
             if ok:
                 ms_map.units = units
 
+        # config options
+        ms_map.setConfigOption("MS_ERRORFILE", "/tmp/ms_"+ _toUtf8( self.txtMapName.text() ) +".log")
+
         # map extent
         extent = self.canvas.fullExtent()
         ms_map.extent.minx = extent.xMinimum()
         ms_map.extent.miny = extent.yMinimum()
         ms_map.extent.maxx = extent.xMaximum()
         ms_map.extent.maxy = extent.yMaximum()
-        ms_map.setProjection( _toUtf8( self.canvas.mapRenderer().destinationCrs().toProj4() ) )
+        if self.canvas.mapRenderer().destinationCrs().authid() != "":
+            ms_map.setProjection( "+init=" + _toUtf8( self.canvas.mapRenderer().destinationCrs().authid() ).lower() )
+        else:
+            ms_map.setProjection( _toUtf8( self.canvas.mapRenderer().destinationCrs().toProj4() ) )
 
         if self.txtMapShapePath.text() != "":
             ms_map.shapepath = _toUtf8( self.getMapShapePath() )
@@ -227,15 +237,16 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
         # map metadata
         ms_map.setMetaData( "ows_title", ms_map.name )
         ms_map.setMetaData( "ows_onlineresource", _toUtf8( u"%s?map=%s" % (self.txtMapServerUrl.text(), self.txtMapFilePath.text()) ) )
-        srsList = []
+        srsList = ["EPSG:4326"]
         srsList.append( _toUtf8( self.canvas.mapRenderer().destinationCrs().authid() ) )
         ms_map.setMetaData( "ows_srs", ' '.join(srsList) )
         ms_map.setMetaData( "ows_enable_request", "*" )
+        ms_map.setMetaData( "wms_feature_info_mime_type", "text/html")
 
         for layer in self.legend.layers():
             # create a layer object
             ms_layer = mapscript.layerObj( ms_map )
-            ms_layer.name = _toUtf8( layer.name() )
+            ms_layer.name = _toUtf8( layer.name().replace(" ", "") )
             ms_layer.type = self.getLayerType( layer )
             ms_layer.status = self.onOffMap[ self.legend.isLayerVisible( layer ) ]
 
@@ -246,13 +257,27 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
             ms_layer.extent.maxx = extent.xMaximum()
             ms_layer.extent.maxy = extent.yMaximum()
 
-            ms_layer.setProjection( _toUtf8( layer.crs().toProj4() ) )
+            if layer.crs().authid() != "":
+                ms_layer.setProjection( "+init=" + _toUtf8( layer.crs().authid() ).lower() )
+            else:
+                ms_layer.setProjection( _toUtf8( layer.crs().toProj4() ) )
 
             if layer.hasScaleBasedVisibility():
                 ms_layer.minscaledenom = layer.minimumScale()
                 ms_layer.maxscaledenom = layer.maximumScale()
 
-            ms_layer.setMetaData( "ows_title", ms_layer.name )
+            if layer.title() != "":
+                ms_layer.setMetaData( "ows_title", _toUtf8(layer.title()))
+            else:
+                ms_layer.setMetaData( "ows_title", _toUtf8(layer.name()))
+
+            if layer.abstract() != "":
+                ms_layer.setMetaData( "ows_abstract",  _toUtf8(layer.abstract()))
+
+            grPath = self.getGroupPath(layer)
+            if grPath != "":
+                ms_layer.setMetaData( "wms_layer_group", grPath)
+
 
             # layer connection
             if layer.providerType() == 'postgres':
@@ -269,14 +294,14 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
 
             elif layer.providerType() == 'wms':
                 ms_layer.setConnectionType( mapscript.MS_WMS, "" )
-                uri = QgsDataSourceURI( layer.source() )
-                ms_layer.connection = _toUtf8( uri.paramValue("url") )
+                q = parse_qs(_toUtf8(layer.source()), True)
+                ms_layer.connection = q["url"][0]
 
                 # loop thru wms sub layers
-                names = []
-                styles = []
-                wmsLayerNames = uri.paramValues("layers")
-                wmsLayerStyles = uri.paramValues("styles")
+                wmsNames = []
+                wmsStyles = []
+                wmsLayerNames = q["layers"]
+                wmsLayerStyles = q["styles"]
                 for index in range(len(wmsLayerNames)): 
                     wmsNames.append( _toUtf8( wmsLayerNames[index] ) )
                     wmsStyles.append( _toUtf8( wmsLayerStyles[index] ) )
@@ -290,7 +315,8 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
                 ms_layer.setMetaData( "wms_server_version", "1.1.1" )
                 ms_layer.setMetaData( "ows_srs", ' '.join(srsList) )
                 #ms_layer.setMetaData( "wms_format", layer.format() )
-                ms_layer.setMetaData( "wms_format", ','.join(wmsStyles) )
+                #ms_layer.setMetaData( "wms_format", ','.join(wmsStyles) )
+                ms_layer.setMetaData( "wms_format", q["format"][0] )
 
             elif layer.providerType() == 'wfs':
                 ms_layer.setConnectionType( mapscript.MS_WMS, "" )
@@ -322,7 +348,7 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
             # set layer style
             if layer.type() == QgsMapLayer.RasterLayer:
                 if hasattr(layer, 'renderer'):    # QGis >= 1.9
-                    opacity = layer.renderer().opacity()
+                    opacity = int( 100 *layer.renderer().opacity())
                 else:
                     opacity = int( 100 * layer.getTransparency() / 255.0 )
                 ms_layer.opacity = opacity
@@ -342,66 +368,91 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
                     # set the mapserver layer style from the SLD file
                     with open( unicode(tempSldPath), 'r' ) as fin:
                         sldContents = fin.read()
-                    if mapscript.MS_SUCCESS != ms_layer.applySLD( sldContents, ms_layer.name ):
+                    if mapscript.MS_SUCCESS != ms_layer.applySLD( sldContents, _toUtf8( layer.name() ) ):
                         QgsMessageLog.logMessage( u"Something went wrong applying the SLD style to the layer '%s'" % ms_layer.name, "RT MapServer Exporter" )
                     QFile.remove( tempSldPath )
 
-            # set layer labels
-            #XXX the following code MUST be removed when QGIS will 
-            # have SLD label support
-            labelingEngine = self.canvas.mapRenderer().labelingEngine()
-            if labelingEngine and labelingEngine.willUseLayer( layer ):
-                palLayer = labelingEngine.layer( layer.id() )
-                if palLayer.enabled:
-                    if not palLayer.isExpression:
-                        ms_layer.labelitem = _toUtf8( palLayer.fieldName )    
-                    else:
-                        #XXX expressions won't be supported until 
-                        # QGIS have SLD label support
-                        pass
+                    # Conversion des unites du SLD
+                    self.convertMapUnit(ms_layer)
 
-                    if palLayer.scaleMin > 0:
-                        ms_layer.labelminscaledenom = palLayer.scaleMin
-                    if palLayer.scaleMax > 0:
-                        ms_layer.labelmaxscaledenom = palLayer.scaleMax
+		    # set layer labels
+		    #XXX the following code MUST be removed when QGIS will 
+		    # have SLD label support
+		    palLayer = QgsPalLayerSettings()
+		    palLayer.readFromLayer(layer)
+		    if palLayer.enabled:
+		            if not palLayer.isExpression:
+		                ms_layer.labelitem = _toUtf8( palLayer.fieldName )    
+		            else:
+		                #XXX expressions won't be supported until 
+		                # QGIS have SLD label support
+		                pass
 
-                    ms_label = mapscript.labelObj()
+		            if palLayer.scaleMin > 0:
+		                ms_layer.labelminscaledenom = palLayer.scaleMin
+		            if palLayer.scaleMax > 0:
+		                ms_layer.labelmaxscaledenom = palLayer.scaleMax
 
-                    ms_label.type = mapscript.MS_TRUETYPE
-                    ms_label.antialias = mapscript.MS_TRUE
+		            ms_label = mapscript.labelObj()
 
-                    ms_label.position = self.getLabelPosition( palLayer )
-                    # TODO: convert offset to pixels
-                    ms_label.offsetx = int( palLayer.xOffset )
-                    ms_label.offsety = int( palLayer.yOffset )
-                    ms_label.angle = palLayer.angleOffset
+		            ms_label.type = mapscript.MS_TRUETYPE
+		            ms_label.antialias = mapscript.MS_TRUE
 
-                    # set label font name, size and color
-                    fontFamily = palLayer.textFont.family().replace(" ", "")
-                    fontStyle = palLayer.textNamedStyle.replace(" ", "")
-                    ms_label.font = _toUtf8( u"%s-%s" % (fontFamily, fontStyle) )    
-                    if palLayer.textFont.pixelSize() > 0:
-                        ms_label.size = int( palLayer.textFont.pixelSize() )
-                    r,g,b,a = palLayer.textColor.getRgb()
-                    ms_label.color.setRGB( r, g, b )
+                            if layer.geometryType() == QGis.Line:
+                                 if palLayer.placementFlags & QgsPalLayerSettings.AboveLine:
+                                      ms_label.position = mapscript.MS_UC
+                                 elif palLayer.placementFlags & QgsPalLayerSettings.BelowLine:
+                                      ms_label.position = mapscript.MS_LC
+                                 elif palLayer.placementFlags & QgsPalLayerSettings.OnLine:
+                                      ms_label.position = mapscript.MS_CC
+                                 ms_label.offsety = int( mmToPixelFactor * palLayer.dist )
+                            else:
+		                 ms_label.position = self.getLabelPosition( palLayer )
+		                 # TODO: convert offset to pixels
+		                 ms_label.offsetx = int( mmToPixelFactor * palLayer.xOffset )
+		                 ms_label.offsety = int( mmToPixelFactor * palLayer.yOffset )
 
-                    if palLayer.fontLimitPixelSize:
-                        ms_label.minsize = palLayer.fontMinPixelSize
-                        ms_label.maxsize = palLayer.fontMaxPixelSize
-                    ms_label.wrap = _toUtf8( palLayer.wrapChar )    
+                            if palLayer.placement == palLayer.Line:
+                                ms_label.anglemode = mapscript.MS_AUTO
+                            if palLayer.placement == palLayer.Curved:
+                                ms_label.anglemode = mapscript.MS_FOLLOW
+                            else:
+		                ms_label.angle = palLayer.angleOffset
 
-                    ms_label.priority = palLayer.priority
+		            # set label font name, size and color
+		            fontFamily = palLayer.textFont.family().replace(" ", "")
+		            fontStyle = palLayer.textNamedStyle.replace(" ", "")
+		            ms_label.font = _toUtf8( u"%s-%s" % (fontFamily, fontStyle) )    
+		            if palLayer.textFont.pointSize() > 0:
+                                # Facteur 0.75 a ete mis en place pour s'approcher du rendu Qgis
+		                ms_label.size = palLayer.textFont.pointSize() * 0.75
+		            r,g,b,a = palLayer.textColor.getRgb()
+		            ms_label.color.setRGB( r, g, b )
 
-                    # TODO: convert buffer size to pixels
-                    ms_label.buffer = int( palLayer.bufferSize )
+                            r,g,b,a = palLayer.bufferColor.getRgb()
+		            ms_label.outlinecolor.setRGB( r, g, b )
+                            ms_label.outlinewidth = int( mmToPixelFactor * palLayer.bufferSize )
 
-                    if int( palLayer.minFeatureSize ) > 0:
-                        # TODO: convert feature size from mm to pixels
-                        ms_label.minfeaturesize = int( palLayer.minFeatureSize )
+		            if palLayer.fontLimitPixelSize:
+		                ms_label.minsize = palLayer.fontMinPixelSize
+		                ms_label.maxsize = palLayer.fontMaxPixelSize
+		            ms_label.wrap = _toUtf8( palLayer.wrapChar )    
 
-                    ms_class = mapscript.classObj()
-                    ms_class.addLabel( ms_label )
-                    ms_layer.insertClass( ms_class )
+		            ms_label.priority = palLayer.priority
+
+		            # TODO: convert buffer size to pixels
+		            # ms_label.buffer = int( mmToPixelFactor * palLayer.bufferSize )
+
+		            if int( palLayer.minFeatureSize ) > 0:
+		                # TODO: convert feature size from mm to pixels
+		                ms_label.minfeaturesize = int( mmToPixelFactor * palLayer.minFeatureSize )
+
+                            for n in range(0, ms_layer.numclasses):
+                                ms_class = ms_layer.getClass(n)
+                                ms_class.addLabel( ms_label )
+		           # ms_class = mapscript.classObj()
+		           # ms_class.addLabel( ms_label )
+		           # ms_layer.insertClass( ms_class )
         
 
         # save the map file now!
@@ -485,7 +536,7 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
 
         for lid, orientation in self.templateTable.model().getObjectIter():
             layer = QgsMapLayerRegistry.instance().mapLayer( lid.toString() )
-            if not layer:
+            if not layer or layer.type() == QgsMapLayer.RasterLayer:
                 continue
 
             # define the template file content
@@ -498,15 +549,16 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
 
             if orientation == Qt.Horizontal:
                 tmpl += '  <tr class="idtmplt_trclass_1h">\n'
-                for idx, fld in layer.dataProvider().fields().iteritems():
-                    fldDescr = fld.comment() if fld.comment() != "" else fld.name()
+                for n in range(0, layer.dataProvider().fields().count()):
+                    fld = layer.dataProvider().fields().field(n)
+                    fldDescr = fld.comment() if fld.comment() != "" else layer.attributeDisplayName(n)
                     tmpl += u'    <td class="idtmplt_tdclass_1h">"%s"</td>\n' % fldDescr
                 tmpl += '</tr>\n'
 
                 tmpl += '[feature limit=20]\n'
 
                 tmpl += '  <tr class="idtmplt_trclass_2h">\n'
-                for idx, fld in layer.dataProvider().fields().iteritems():
+                for fld in layer.dataProvider().fields().toList():
                     fldDescr = fld.comment() if fld.comment() != "" else fld.name()
                     tmpl += u'    <td class="idtmplt_tdclass_2h">[item name="%s"]</td>\n' % fld.name()
                 tmpl += '  </tr>\n'
@@ -514,7 +566,7 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
                 tmpl += '[/feature]\n'
 
             else:
-                for idx, fld in layer.dataProvider().fields().iteritems():
+                for fld in layer.dataProvider().fields().toList():
                     tmpl += '  <tr class="idtmplt_trclass_v">\n'
 
                     fldDescr = fld.comment() if fld.comment() != "" else fld.name()
@@ -570,6 +622,37 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
 
     def getWebTemporaryPath(self):
         return self.txtWebTempPath.text() #"/tmp/"
+
+    def getGroupPath(self, ms_layer):
+        groupLayerRelationShip = self.iface.legendInterface().groupLayerRelationship()
+        iterStr = ms_layer.id()
+        path = [];
+        mustContinue = True
+        while mustContinue :
+             mustContinue = False
+	     for group in groupLayerRelationShip :
+                  if (iterStr in group[1]):
+                      path.insert(0,_toUtf8(group[0]))
+                      iterStr = group[0]
+                      mustContinue = True
+                      break
+        aggrPath = '/'.join(path)
+        if aggrPath != '':
+             return '/' + aggrPath
+        else:
+             return ''
+
+    def convertMapUnit(self, ms_layer):
+        for n in range(0, ms_layer.numclasses):
+            ms_class = ms_layer.getClass(n)
+            for m in range(0, ms_class.numstyles):
+                ms_style = ms_class.getStyle(m)
+		ms_style.width *= mmToPixelFactor
+		# Ne fonctionne pas correctement
+                #for attr in dir(ms_style):
+                #    if "width" in attr and ms_style.__getattr__(attr) is not None:
+                #       ms_style.__setattr__(attr, ms_style.__getattr__(attr) * mmToPixelFactor)
+        return
 
 
 class TemplateDelegate(QItemDelegate):
