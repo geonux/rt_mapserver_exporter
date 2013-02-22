@@ -117,6 +117,9 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
         if title != "":
             self.txtMapName.setText( title )
 
+	# add the last used mapfile
+        self.loadProperties()
+
         # fill the image format combo
         self.cmbMapImageType.addItems( QStringList(["png", "gif", "jpeg", "svg", "GTiff"]) )
 
@@ -125,18 +128,39 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
         QObject.connect( self.btnChooseTmplHeader, SIGNAL("clicked()"), self.selectTemplateHeader )
         QObject.connect( self.btnChooseTmplFooter, SIGNAL("clicked()"), self.selectTemplateFooter )
 
-    def selectMapFile(self):
-        # retrieve the last used map file path
-        settings = QSettings()
-        lastUsedFile = settings.value("/rt_mapserver_exporter/lastUsedFile", "").toString()
 
+    def loadProperties(self):
+        # load last used values
+        settings = QSettings()
+
+        lastUsedMapFile = settings.value("/rt_mapserver_exporter/lastUsedMapFile", "").toString()
+        self.txtMapFilePath.setText( lastUsedMapFile )
+
+        lastUsedTmpl = settings.value("/rt_mapserver_exporter/lastUsedTmpl", "").toString()
+        self.txtTemplatePath.setText( lastUsedTmpl )
+
+        lastUsedFontsFile = settings.value("/rt_mapserver_exporter/lastUsedFontsFile", "").toString()
+        self.txtMapFontsetPath.setText( lastUsedFontsFile )
+
+        lastUsedMapServerURL = settings.value("/rt_mapserver_exporter/lastUsedMapServerURL", "").toString()
+        self.txtMapServerUrl.setText( lastUsedMapServerURL )
+
+    def storeProperties(self):
+        # store the last used map file properties
+        settings = QSettings()
+
+        settings.setValue("/rt_mapserver_exporter/lastUsedMapFile",  self.txtMapFilePath.text())
+        settings.setValue("/rt_mapserver_exporter/lastUsedTmpl", self.txtTemplatePath.text())
+        settings.setValue("/rt_mapserver_exporter/lastUsedFontsFile", self.txtMapFontsetPath.text())
+        settings.setValue("/rt_mapserver_exporter/lastUsedMapServerURL", self.txtMapServerUrl.text())
+
+
+    def selectMapFile(self):
         # ask for choosing where to store the map file
-        filename = QFileDialog.getSaveFileName(self, "Select where to save the map file", lastUsedFile, "MapFile (*.map)")
+        filename = QFileDialog.getSaveFileName(self, "Select where to save the map file", self.txtMapFilePath.text(), "MapFile (*.map)")
         if filename == "":
             return
 
-        # store the last used map file path
-        settings.setValue("/rt_mapserver_exporter/lastUsedFile", filename)
         # update the displayd path
         self.txtMapFilePath.setText( filename )
 
@@ -150,17 +174,11 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
         self.selectTemplateFile( self.txtTmplFooterPath )
 
     def selectTemplateFile(self, lineedit):
-        # retrieve the last used template file path
-        settings = QSettings()
-        lastUsedFile = settings.value("/rt_mapserver_exporter/lastUsedTmpl", "").toString()
-
         # ask for choosing where to store the map file
-        filename = QFileDialog.getOpenFileName(self, "Select the template file", lastUsedFile, "Template (*.html *.tmpl);;All files (*);;")
+        filename = QFileDialog.getOpenFileName(self, "Select the template file", lineedit.text(), "Template (*.html *.tmpl);;All files (*);;")
         if filename == "":
             return
 
-        # store the last used map file path
-        settings.setValue("/rt_mapserver_exporter/lastUsedTmpl", filename)
         # update the path
         lineedit.setText( filename )
 
@@ -459,6 +477,9 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
         if mapscript.MS_SUCCESS != ms_map.save( _toUtf8( self.txtMapFilePath.text() )     ):
             return
 
+        # Save GUI parameters
+        self.storeProperties()
+
         # Most of the following code does not use mapscript because it asserts 
         # paths you supply exists, but this requirement is usually not meet on 
         # the QGIS client used to generate the mafile.
@@ -609,10 +630,8 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
     def getTemplateFooterPath(self):
         return self.txtTmplFooterPath.text()
 
-
     def getMapShapePath(self):
         return self.txtMapShapePath.text()
-
 
     def getWebImagePath(self):
         return self.txtWebImagePath.text() #"/tmp/"
@@ -648,10 +667,6 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
             for m in range(0, ms_class.numstyles):
                 ms_style = ms_class.getStyle(m)
 		ms_style.width *= mmToPixelFactor
-		# Ne fonctionne pas correctement
-                #for attr in dir(ms_style):
-                #    if "width" in attr and ms_style.__getattr__(attr) is not None:
-                #       ms_style.__setattr__(attr, ms_style.__getattr__(attr) * mmToPixelFactor)
         return
 
 
