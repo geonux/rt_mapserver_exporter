@@ -254,7 +254,7 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
         ms_map.web.footer = _toUtf8( self.getTemplateFooterPath() )
 
         # map metadata
-        if (QgsProject.instance().readBoolEntry( "WMSServiceCapabilities", "/", False )):
+        if (QgsProject.instance().readBoolEntry( "WMSServiceCapabilities", "/", False )[0]):
             ms_map.setMetaData( "ows_title", _toUtf8( QgsProject.instance().readEntry("WMSServiceTitle", "/", "")[0] ) )
             ms_map.setMetaData( "ows_abstract", _toUtf8( QgsProject.instance().readEntry("WMSServiceAbstract", "/", "")[0] ) )
             ms_map.setMetaData( "ows_contactorganization", _toUtf8( QgsProject.instance().readEntry("WMSContactOrganization", "/", "")[0] ) )
@@ -401,8 +401,11 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
                         QgsMessageLog.logMessage( u"Something went wrong applying the SLD style to the layer '%s'" % ms_layer.name, "RT MapServer Exporter" )
                     QFile.remove( tempSldPath )
 
-                    # Conversion des unites du SLD
+                    # Convert units between QGis (mm) and MapServer (pixels)
                     self.convertMapUnit(ms_layer)
+
+                    # MapServer patch : SLD "GAP" is not recognized
+                    self.patchGAP(layer, ms_layer)
 
 		    # set layer labels
 		    #XXX the following code MUST be removed when QGIS will 
@@ -678,6 +681,20 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
             for m in range(0, ms_class.numstyles):
                 ms_style = ms_class.getStyle(m)
 		ms_style.width *= mmToPixelFactor
+		ms_style.size *= mmToPixelFactor
+        return
+
+    def patchGAP(self, layer, ms_layer):
+        if layer.rendererV2() == '':
+            return
+
+        for n in range(0, len(layer.rendererV2().symbols())):
+            symbol = layer.rendererV2().symbols()[n]
+            for m in range(0, symbol.symbolLayerCount()):
+                symbolLayer = symbol.symbolLayer(m)
+                if symbolLayer.layerType() == u"MarkerLine":
+		    ms_layer.getClass(n).getStyle(m).gap = symbolLayer.interval() * mmToPixelFactor
+		    ms_layer.getClass(n).getStyle(m).width /= mmToPixelFactor
         return
 
 
