@@ -33,6 +33,8 @@ from urlparse import parse_qs
 
 _toUtf8 = lambda s: unicode(s).encode('utf8')
 
+_cleanStr = lambda s: _toUtf8(s).replace(" ", "_")
+
 mmToPixelFactor = 3.77952755905 # pour 96 dpi = 38 dot/cm = 3.8 dot/mm
 
 
@@ -184,6 +186,8 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
 
 
     def accept(self):
+        layerGroups = []
+
         # check user inputs
         if self.txtMapFilePath.text() == "":
             QMessageBox.warning(self, "RT MapServer Exporter", "Mapfile output path is required")
@@ -191,7 +195,7 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
 
         # create a new ms_map
         ms_map = mapscript.mapObj()
-        ms_map.name = _toUtf8( self.txtMapName.text().replace(" ", "") )
+        ms_map.name = _cleanStr( self.txtMapName.text() )
 
         # map size
         (width, widthOk), (height, heightOk) = self.txtMapWidth.text().toInt(), self.txtMapHeight.text().toInt()
@@ -274,11 +278,15 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
         ms_map.setMetaData( "wms_feature_info_mime_type", "text/html")
 
         for layer in self.legend.layers():
+            # do not process invisible layer
+            if not self.legend.isLayerVisible( layer ):
+               continue;
+
             # create a layer object
             ms_layer = mapscript.layerObj( ms_map )
-            ms_layer.name = _toUtf8( layer.name().replace(" ", "") )
+            ms_layer.name = _cleanStr( layer.name() )
             ms_layer.type = self.getLayerType( layer )
-            ms_layer.status = self.onOffMap[ self.legend.isLayerVisible( layer ) ]
+            ms_layer.status = mapscript.MS_ON
 
             # layer extent
             extent = layer.extent()
@@ -304,10 +312,18 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
             if layer.abstract() != "":
                 ms_layer.setMetaData( "ows_abstract",  _toUtf8(layer.abstract()))
 
-            grPath = self.getGroupPath(layer)
-            if grPath != "":
-                ms_layer.setMetaData( "wms_layer_group", grPath)
+            arrPath = self.getGroupPath(layer)
+            if arrPath != "":
+                path = '/' +'/'.join(arrPath)
+                ms_layer.setMetaData( "wms_layer_group", _cleanStr( path ))
 
+                if not path in layerGroups :
+                    ms_layer_group = mapscript.layerObj( ms_map )
+                    ms_layer_group.name = _cleanStr(arrPath[-1] )
+                    ms_layer_group.setMetaData( "ows_title", arrPath[-1])
+                    ms_layer_group.type = ms_layer.type
+                    ms_layer.status = mapscript.MS_ON
+                    layerGroups.append( path )
 
             # layer connection
             if layer.providerType() == 'postgres':
@@ -342,13 +358,13 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
                 srsList.append( _toUtf8( layer.crs().authid() ) )
 
                 # Create necessary wms metadata
-                ms_layer.setMetaData( "ows_name", ','.join(wmsNames) )
+                ms_layer.setMetaData( "ows_name", ',' . join(wmsNames) )
                 ms_layer.setMetaData( "wms_server_version", "1.1.1" )
-                ms_layer.setMetaData( "ows_srs", ' '.join(srsList) )
+                ms_layer.setMetaData( "ows_srs", ' ' . join(srsList) )
                 ms_layer.setMetaData( "wms_format", q["format"][0] )
 
             elif layer.providerType() == 'wfs':
-                ms_layer.setConnectionType( mapscript.MS_WMS, "" )
+                ms_layer.setConnectionType( mapscript.MS_WFS, "" )
                 uri = QgsDataSourceURI( layer.source() )
                 ms_layer.connection = _toUtf8( uri.uri() )
 
@@ -657,7 +673,7 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
         return self.txtWebTempPath.text() #"/tmp/"
 
     def getGroupPath(self, ms_layer):
-        groupLayerRelationShip = self.iface.legendInterface().groupLayerRelationship()
+        groupLayerRelationShip = self.legend.groupLayerRelationship()
         iterStr = ms_layer.id()
         path = [];
         mustContinue = True
@@ -669,11 +685,7 @@ class MapfileExportDlg(QDialog, Ui_MapfileExportDlg):
                       iterStr = group[0]
                       mustContinue = True
                       break
-        aggrPath = '/'.join(path)
-        if aggrPath != '':
-             return '/' + aggrPath
-        else:
-             return ''
+        return path
 
     def convertMapUnit(self, ms_layer):
         for n in range(0, ms_layer.numclasses):
